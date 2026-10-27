@@ -36,6 +36,16 @@ use commands::{
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin: a second launch hands its args to this
+        // instance and exits, so just bring the main window forward.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            log::info!("[app] second instance blocked, focusing main window");
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(
             LogBuilder::new()
                 .targets([Target::new(TargetKind::LogDir { file_name: None })])

@@ -13,6 +13,7 @@ This is a personal copy of [Splode/pomotroid](https://github.com/Splode/pomotroi
 - After pushing any change, deploy it with the `deploy` skill (`bash scripts/deploy.sh`): it waits for the CI run, installs the result, and relaunches the app.
 - Push straight to `main`. Never push version tags: `release.yml` fires on them and needs signing secrets this repo does not have.
 - The in-app update check is stubbed in `src-tauri/src/commands.rs` to always report up to date.
+- Only one instance runs at a time (`tauri-plugin-single-instance`, registered first in `src-tauri/src/lib.rs`); a second launch focuses the existing main window and exits.
 
 ## Commands
 
