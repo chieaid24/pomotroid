@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::audio::{AudioCue, AudioManager};
 use crate::db::{queries, DbState};
 use crate::settings::Settings;
-use crate::tray::{self, TrayState};
+use crate::tray::{self, TrayState, TrayStatus};
 use crate::websocket::{self, WsState};
 
 use engine::{EngineHandle, TimerCommand, TimerEvent};
@@ -47,6 +47,21 @@ pub struct TimerSnapshot {
 struct TimerShared {
     elapsed_secs: u32,
     is_running: bool,
+    /// A round completed (not skipped) and the next one has not started yet.
+    finished: bool,
+}
+
+/// Tray overlay for the current timer state.
+fn tray_status(s: &TimerShared) -> TrayStatus {
+    if s.is_running {
+        TrayStatus::Normal
+    } else if s.elapsed_secs > 0 {
+        TrayStatus::Paused
+    } else if s.finished {
+        TrayStatus::Finished
+    } else {
+        TrayStatus::Normal
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +97,7 @@ impl TimerController {
         let shared = Arc::new(Mutex::new(TimerShared {
             elapsed_secs: 0,
             is_running: false,
+            finished: false,
         }));
 
         // Clone handles for the event-listener thread.
@@ -178,6 +194,11 @@ impl TimerController {
 
     // --- Query ---
 
+    /// Tray overlay matching the current timer state.
+    pub fn tray_status(&self) -> TrayStatus {
+        tray_status(&self.shared.lock().unwrap())
+    }
+
     pub fn get_snapshot(&self) -> TimerSnapshot {
         let seq = self.sequence.lock().unwrap();
         let settings = self.settings.lock().unwrap();
@@ -246,11 +267,18 @@ fn listen_events(
         match event {
             TimerEvent::Started { total_secs } => {
                 log::info!("[timer] started total={total_secs}s");
-                shared.lock().unwrap().is_running = true;
+                {
+                    let mut s = shared.lock().unwrap();
+                    s.is_running = true;
+                    s.finished = false;
+                }
                 let _ = app.emit("timer:started", serde_json::json!({ "total_secs": total_secs }));
                 if let Some(ws) = app.try_state::<Arc<WsState>>() {
                     websocket::broadcast_started(&ws, total_secs);
                 }
+                // Clear any finished check mark right away rather than on the first tick.
+                let rt = sequence.lock().unwrap().current_round.as_str().to_string();
+                tray::update_icon(&tray, &rt, TrayStatus::Normal, 0.0);
                 tray::update_menu_items(&tray, true, false);
             }
 
@@ -259,6 +287,7 @@ fn listen_events(
                     let mut s = shared.lock().unwrap();
                     s.elapsed_secs = elapsed_secs;
                     s.is_running = true;
+                    s.finished = false;
                 }
                 let _ = app.emit(
                     "timer:tick",
@@ -296,7 +325,7 @@ fn listen_events(
                     0.0
                 };
                 if (progress - last_tray_progress).abs() >= 0.01 {
-                    tray::update_icon(&tray, &rt, false, progress);
+                    tray::update_icon(&tray, &rt, TrayStatus::Normal, progress);
                     last_tray_progress = progress;
                 }
             }
@@ -322,12 +351,14 @@ fn listen_events(
                     (rt, dur, s.auto_start_work, s.auto_start_break)
                 };
 
-                // Reset shared state for the new round.
-                {
+                // Reset shared state for the new round. A skip is not a finish.
+                let status = {
                     let mut s = shared.lock().unwrap();
                     s.elapsed_secs = 0;
                     s.is_running = false;
-                }
+                    s.finished = !was_skipped;
+                    tray_status(&s)
+                };
 
                 // Arm the next round's duration without risking a late
                 // reconfigure that kicks a freshly-started timer back to Idle.
@@ -373,7 +404,7 @@ fn listen_events(
                 // regardless of how long the round is.  Using 0.0 here caused
                 // a ≥15-second blank period before the arc started animating.
                 let rt = sequence.lock().unwrap().current_round.as_str().to_string();
-                tray::update_icon(&tray, &rt, false, 0.0);
+                tray::update_icon(&tray, &rt, status, 0.0);
                 last_tray_progress = -1.0;
 
                 // Broadcast round-change to any connected WebSocket clients.
@@ -414,7 +445,7 @@ fn listen_events(
                     seq.current_duration_secs(&s)
                 };
                 let progress = if total > 0 { elapsed_secs as f32 / total as f32 } else { 0.0 };
-                tray::update_icon(&tray, &rt, true, progress);
+                tray::update_icon(&tray, &rt, TrayStatus::Paused, progress);
                 tray::update_menu_items(&tray, false, true);
             }
 
@@ -434,7 +465,7 @@ fn listen_events(
                     seq.current_duration_secs(&s)
                 };
                 let progress = if total > 0 { elapsed_secs as f32 / total as f32 } else { 0.0 };
-                tray::update_icon(&tray, &rt, false, progress);
+                tray::update_icon(&tray, &rt, TrayStatus::Normal, progress);
                 last_tray_progress = progress;
                 tray::update_menu_items(&tray, true, false);
             }
@@ -448,6 +479,7 @@ fn listen_events(
                     let mut s = shared.lock().unwrap();
                     s.elapsed_secs = 0;
                     s.is_running = false;
+                    s.finished = false;
                 }
                 let snapshot = build_snapshot(&sequence, &settings, &shared);
                 let _ = app.emit("timer:reset", snapshot);
@@ -469,7 +501,7 @@ fn listen_events(
 
                 // Reset tray to idle (empty arc).
                 let rt = sequence.lock().unwrap().current_round.as_str().to_string();
-                tray::update_icon(&tray, &rt, false, 0.0);
+                tray::update_icon(&tray, &rt, TrayStatus::Normal, 0.0);
                 last_tray_progress = -1.0;
                 tray::update_menu_items(&tray, false, false);
             }
@@ -490,7 +522,7 @@ fn listen_events(
                     seq.current_duration_secs(&s)
                 };
                 let progress = if total > 0 { elapsed_secs as f32 / total as f32 } else { 0.0 };
-                tray::update_icon(&tray, &rt, true, progress);
+                tray::update_icon(&tray, &rt, TrayStatus::Paused, progress);
             }
         }
     }

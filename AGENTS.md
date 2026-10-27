@@ -103,14 +103,14 @@ Uses `@inlang/paraglide-js`. Message files are in `project.inlang/`. After editi
 
 ### Rust modules
 
-| Module          | Purpose                                                                              |
-| --------------- | ------------------------------------------------------------------------------------ |
-| `audio`         | rodio-based audio playback, custom sound file management                             |
-| `db`            | SQLite connection, migrations, queries                                               |
-| `notifications` | OS notification wrapper                                                              |
-| `settings`      | Settings struct, DB load/save, defaults                                              |
-| `shortcuts`     | Global keyboard shortcut registration via tauri-plugin-global-shortcut               |
-| `themes`        | Theme loading, custom theme watching (notify crate), tray icon rendering (tiny-skia) |
-| `timer`         | Timer engine (background thread), sequence state, controller                         |
-| `tray`          | System tray icon, tray menu, timer display in tray                                   |
-| `websocket`     | Optional WebSocket server (axum) for external timer control                          |
+| Module          | Purpose                                                                                                    |
+| --------------- | ---------------------------------------------------------------------------------------------------------- |
+| `audio`         | rodio-based audio playback, custom sound file management                                                   |
+| `db`            | SQLite connection, migrations, queries                                                                     |
+| `notifications` | OS notification wrapper                                                                                    |
+| `settings`      | Settings struct, DB load/save, defaults                                                                    |
+| `shortcuts`     | Global keyboard shortcut registration via tauri-plugin-global-shortcut                                     |
+| `themes`        | Theme loading, custom theme watching (notify crate), tray icon rendering (tiny-skia)                       |
+| `timer`         | Timer engine (background thread), sequence state, controller                                               |
+| `tray`          | System tray icon, tray menu, timer display in tray (`TrayStatus`: arc, pause bars, or finished check mark) |
+| `websocket`     | Optional WebSocket server (axum) for external timer control                                                |

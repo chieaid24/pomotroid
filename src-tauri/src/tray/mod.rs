@@ -4,6 +4,9 @@
 ///   - Solid filled background circle in the theme's background color.
 ///   - Progress arc from 12 o'clock sweeping clockwise, colored by round type.
 ///   - While paused: two vertical bars drawn over the progress arc.
+///   - After a round completes: a check mark inside the ring until the next
+///     round starts. Ring and check are gray (track color) when a break is
+///     next and the focus color when work is next.
 ///
 /// Colors come from the active theme, updated when theme changes.
 /// The tray is created/destroyed when `min_to_tray` setting changes.
@@ -95,6 +98,22 @@ pub fn parse_hex_color(hex: &str) -> Option<[u8; 4]> {
         }
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Icon status
+// ---------------------------------------------------------------------------
+
+/// What the icon shows on top of the ring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayStatus {
+    /// Idle or running: progress arc only.
+    Normal,
+    /// Pause bars over the progress arc.
+    Paused,
+    /// A round just completed and the next one has not started: check mark,
+    /// ring colored for the upcoming round.
+    Finished,
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +283,7 @@ pub fn create_tray(app: &AppHandle, state: &Arc<TrayState>) {
     let image = {
         let colors = state.colors.lock().unwrap().clone();
         let countdown = *state.countdown_mode.lock().unwrap();
-        let bytes = render_tray_icon_rgba(&colors, false, 0.0, "work", countdown);
+        let bytes = render_tray_icon_rgba(&colors, TrayStatus::Normal, 0.0, "work", countdown);
         Image::new_owned(bytes, SIZE, SIZE)
     };
 
@@ -368,15 +387,15 @@ pub fn destroy_tray(state: &Arc<TrayState>) {
 /// Re-render and push a new RGBA icon to the tray.
 ///
 /// - `round_type`: "work" | "short-break" | "long-break"
-/// - `paused`: show pause bars over the progress arc
+/// - `status`: overlay to draw (pause bars, check mark, or none)
 /// - `progress`: 0.0 (empty) to 1.0 (full, i.e. elapsed/total)
-pub fn update_icon(state: &Arc<TrayState>, round_type: &str, paused: bool, progress: f32) {
+pub fn update_icon(state: &Arc<TrayState>, round_type: &str, status: TrayStatus, progress: f32) {
     let guard = state.icon.lock().unwrap();
     let Some(tray) = guard.as_ref() else { return };
 
     let colors = state.colors.lock().unwrap().clone();
     let countdown = *state.countdown_mode.lock().unwrap();
-    let bytes = render_tray_icon_rgba(&colors, paused, progress, round_type, countdown);
+    let bytes = render_tray_icon_rgba(&colors, status, progress, round_type, countdown);
 
     let image = Image::new_owned(bytes, SIZE, SIZE);
     let _ = tray.set_icon(Some(image));
@@ -430,7 +449,7 @@ fn rgba_color(c: [u8; 4]) -> Color {
 /// unlike a solid filled disc which looks like a dark blob at small sizes.
 pub fn render_tray_icon_rgba(
     colors: &TrayColors,
-    paused: bool,
+    status: TrayStatus,
     progress: f32,
     round_type: &str,
     countdown: bool,
@@ -446,10 +465,11 @@ pub fn render_tray_icon_rgba(
     };
 
     // Track ring: full circle at low opacity — defines the circular shape.
-    {
+    let track_color = {
         let [r, g, b, _] = colors.foreground;
-        paint.set_color(Color::from_rgba8(r, g, b, TRACK_ALPHA));
-    }
+        Color::from_rgba8(r, g, b, TRACK_ALPHA)
+    };
+    paint.set_color(track_color);
     let ring = {
         let mut pb = PathBuilder::new();
         pb.push_circle(CENTER, CENTER, RADIUS);
@@ -464,6 +484,20 @@ pub fn render_tray_icon_rgba(
         _             => rgba_color(colors.focus_round),
     };
 
+    if status == TrayStatus::Finished {
+        // `round_type` is already the upcoming round here. Work next: solid
+        // focus-colored ring. Break next: ring stays track gray. The check
+        // mark matches the ring either way.
+        let color = if round_type == "work" { round_color } else { track_color };
+        if round_type == "work" {
+            paint.set_color(color);
+            pixmap.stroke_path(&ring, &paint, &stroke, Transform::identity(), None);
+        }
+        paint.set_color(color);
+        draw_check_mark(&mut pixmap, &paint);
+        return pixmap.take();
+    }
+
     // Progress arc from 12 o'clock, clockwise, in the round-type colour.
     paint.set_color(round_color);
 
@@ -477,7 +511,7 @@ pub fn render_tray_icon_rgba(
         pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
     }
 
-    if paused {
+    if status == TrayStatus::Paused {
         // Two vertical bars centred in the ring, in the round-type colour so
         // they read clearly on any panel colour regardless of theme foreground.
         paint.set_color(round_color);
@@ -497,6 +531,22 @@ pub fn render_tray_icon_rgba(
     }
 
     pixmap.take()
+}
+
+/// Stroke a check mark centred inside the ring.
+fn draw_check_mark(pixmap: &mut Pixmap, paint: &Paint) {
+    let mut pb = PathBuilder::new();
+    pb.move_to(CENTER - 11.0, CENTER + 1.0);
+    pb.line_to(CENTER - 3.0, CENTER + 9.0);
+    pb.line_to(CENTER + 12.0, CENTER - 8.0);
+    let Some(path) = pb.finish() else { return };
+    let stroke = Stroke {
+        width: STROKE_WIDTH * 1.2,
+        line_cap: tiny_skia::LineCap::Round,
+        line_join: tiny_skia::LineJoin::Round,
+        ..Default::default()
+    };
+    pixmap.stroke_path(&path, paint, &stroke, Transform::identity(), None);
 }
 
 /// Approximate a circular arc with cubic Bézier segments (max π/2 per segment).
@@ -540,34 +590,82 @@ mod tests {
 
     #[test]
     fn render_returns_correct_byte_count() {
-        let bytes = render_tray_icon_rgba(&TrayColors::default(), false, 0.5, "work", false);
+        let bytes = render_tray_icon_rgba(&TrayColors::default(), TrayStatus::Normal, 0.5, "work", false);
         assert_eq!(bytes.len(), (SIZE * SIZE * 4) as usize);
     }
 
     #[test]
     fn render_paused_returns_correct_byte_count() {
-        let bytes = render_tray_icon_rgba(&TrayColors::default(), true, 0.0, "work", false);
+        let bytes = render_tray_icon_rgba(&TrayColors::default(), TrayStatus::Paused, 0.0, "work", false);
         assert_eq!(bytes.len(), (SIZE * SIZE * 4) as usize);
     }
 
     #[test]
     fn render_paused_preserves_progress_arc() {
-        let empty = render_tray_icon_rgba(&TrayColors::default(), true, 0.0, "work", false);
-        let half = render_tray_icon_rgba(&TrayColors::default(), true, 0.5, "work", false);
+        let empty = render_tray_icon_rgba(&TrayColors::default(), TrayStatus::Paused, 0.0, "work", false);
+        let half = render_tray_icon_rgba(&TrayColors::default(), TrayStatus::Paused, 0.5, "work", false);
         assert!(empty != half);
     }
 
     #[test]
     fn render_paused_still_shows_pause_indicator() {
-        let running = render_tray_icon_rgba(&TrayColors::default(), false, 0.5, "work", false);
-        let paused = render_tray_icon_rgba(&TrayColors::default(), true, 0.5, "work", false);
+        let running = render_tray_icon_rgba(&TrayColors::default(), TrayStatus::Normal, 0.5, "work", false);
+        let paused = render_tray_icon_rgba(&TrayColors::default(), TrayStatus::Paused, 0.5, "work", false);
         assert!(running != paused);
     }
 
     #[test]
     fn render_zero_progress_returns_correct_byte_count() {
-        let bytes = render_tray_icon_rgba(&TrayColors::default(), false, 0.0, "work", false);
+        let bytes = render_tray_icon_rgba(&TrayColors::default(), TrayStatus::Normal, 0.0, "work", false);
         assert_eq!(bytes.len(), (SIZE * SIZE * 4) as usize);
+    }
+
+    /// RGBA of one pixel (premultiplied alpha, as stored by tiny-skia).
+    fn pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * SIZE + x) * 4) as usize;
+        [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+    }
+
+    // Point on the ring stroke (12 o'clock) and on the check mark's lower vertex.
+    const RING_TOP: (u32, u32) = (CENTER as u32, (CENTER - RADIUS) as u32);
+    const CHECK_VERTEX: (u32, u32) = ((CENTER - 3.0) as u32, (CENTER + 9.0) as u32);
+
+    #[test]
+    fn finished_draws_check_mark_inside_ring() {
+        let colors = TrayColors::default();
+        let normal = render_tray_icon_rgba(&colors, TrayStatus::Normal, 0.0, "work", false);
+        let finished = render_tray_icon_rgba(&colors, TrayStatus::Finished, 0.0, "work", false);
+        assert_eq!(pixel(&normal, CHECK_VERTEX.0, CHECK_VERTEX.1)[3], 0);
+        assert_eq!(pixel(&finished, CHECK_VERTEX.0, CHECK_VERTEX.1)[3], 255);
+    }
+
+    #[test]
+    fn finished_before_work_uses_focus_color_for_ring_and_check() {
+        let colors = TrayColors::default();
+        let bytes = render_tray_icon_rgba(&colors, TrayStatus::Finished, 0.0, "work", true);
+        assert_eq!(pixel(&bytes, RING_TOP.0, RING_TOP.1), colors.focus_round);
+        assert_eq!(pixel(&bytes, CHECK_VERTEX.0, CHECK_VERTEX.1), colors.focus_round);
+    }
+
+    #[test]
+    fn finished_before_break_keeps_ring_gray_and_matches_check() {
+        let colors = TrayColors::default();
+        for rt in ["short-break", "long-break"] {
+            for countdown in [false, true] {
+                let bytes = render_tray_icon_rgba(&colors, TrayStatus::Finished, 0.0, rt, countdown);
+                let ring = pixel(&bytes, RING_TOP.0, RING_TOP.1);
+                let check = pixel(&bytes, CHECK_VERTEX.0, CHECK_VERTEX.1);
+                assert_eq!(ring[3], TRACK_ALPHA, "{rt} countdown={countdown}");
+                assert_eq!(ring, check, "{rt} countdown={countdown}");
+            }
+        }
+    }
+
+    #[test]
+    fn countdown_idle_before_break_is_solid_round_color_when_not_finished() {
+        let colors = TrayColors::default();
+        let bytes = render_tray_icon_rgba(&colors, TrayStatus::Normal, 0.0, "short-break", true);
+        assert_eq!(pixel(&bytes, RING_TOP.0, RING_TOP.1), colors.short_round);
     }
 
     #[test]
