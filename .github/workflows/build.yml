@@ -1,124 +1,13 @@
-name: Build / Test
+name: Build
 
 on:
   push:
     branches: [main, 'bugfix/**', 'feat/**']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  build-linux:
-    name: Linux x64
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            rpm
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Sync SvelteKit types
-        run: npx svelte-kit sync
-
-      - name: Svelte type check
-        run: npm run check
-
-      - name: Clippy (deny warnings)
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-
-      - name: Cargo test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-
-      - name: Build (release)
-        run: npm run tauri build -- --bundles deb,appimage,rpm
-        env:
-          CI: true
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: pomotroid-linux-x64
-          path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/rpm/*.rpm
-          if-no-files-found: error
-
-  build-macos:
-    name: macOS (universal)
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install Rust stable (with universal targets)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Sync SvelteKit types
-        run: npx svelte-kit sync
-
-      - name: Build (release, universal binary)
-        run: npm run tauri build -- --bundles dmg --target universal-apple-darwin
-        env:
-          CI: true
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: pomotroid-macos-universal
-          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-          if-no-files-found: error
-
   build-windows:
     name: Windows x64
     runs-on: windows-latest
