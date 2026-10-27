@@ -642,37 +642,11 @@ pub struct UpdateInfo {
     pub date: Option<String>,
 }
 
-/// Check whether a newer version is available.
-/// Returns `Some(UpdateInfo)` when an update is available, or `None` when
-/// the running version is already the latest.
-/// Errors (e.g. network failure) are surfaced as a string so the frontend
-/// can display a non-blocking message.
+/// Update checks are disabled in this fork: builds come from CI, not upstream's feed.
 #[tauri::command]
-pub async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
-    use tauri_plugin_updater::UpdaterExt;
-    log::info!("[updater] checking for updates");
-    let updater = app.updater().map_err(|e| {
-        log::error!("[updater] failed to build updater: {e}");
-        e.to_string()
-    })?;
-    match updater.check().await {
-        Ok(Some(update)) => {
-            log::info!("[updater] update available: v{}", update.version);
-            Ok(Some(UpdateInfo {
-                version: update.version.clone(),
-                body: update.body.clone(),
-                date: update.date.map(|d| d.to_string()),
-            }))
-        }
-        Ok(None) => {
-            log::info!("[updater] already up to date");
-            Ok(None)
-        }
-        Err(e) => {
-            log::warn!("[updater] update check failed: {e}");
-            Err(e.to_string())
-        }
-    }
+pub async fn check_update(_app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    log::info!("[updater] update checks disabled in this fork");
+    Ok(None)
 }
 
 /// Download, verify, and install the pending update, then relaunch immediately.
