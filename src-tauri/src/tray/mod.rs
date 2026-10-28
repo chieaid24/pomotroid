@@ -147,17 +147,13 @@ impl TrayState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TrayWindowAction {
-    Hide,
-    Restore,
-}
-
-fn tray_window_action(is_visible: bool, is_minimized: bool) -> TrayWindowAction {
-    if is_visible && !is_minimized {
-        TrayWindowAction::Hide
-    } else {
-        TrayWindowAction::Restore
+/// Show, unminimize, and focus the main window. Never hides it: hiding is
+/// only done from the window's own minimize/close buttons.
+fn restore_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
     }
 }
 
@@ -293,30 +289,15 @@ pub fn create_tray(app: &AppHandle, state: &Arc<TrayState>) {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray_icon, event| {
-            // Left-click: toggle window visibility.
+            // Left-click: always bring the main window up.
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
             } = event
             {
-                let app = tray_icon.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    let visible = window.is_visible().unwrap_or(false);
-                    let minimized = window.is_minimized().unwrap_or(false);
-                    match tray_window_action(visible, minimized) {
-                        TrayWindowAction::Hide => {
-                            log::debug!("[tray] left-click → hide");
-                            let _ = window.hide();
-                        }
-                        TrayWindowAction::Restore => {
-                            log::debug!("[tray] left-click → show");
-                            let _ = window.show();
-                            let _ = window.unminimize();
-                            let _ = window.set_focus();
-                        }
-                    }
-                }
+                log::debug!("[tray] left-click → show");
+                restore_main_window(tray_icon.app_handle());
             }
         })
         .on_menu_event(|app, event| {
@@ -338,11 +319,7 @@ pub fn create_tray(app: &AppHandle, state: &Arc<TrayState>) {
                 }
                 "show" => {
                     log::info!("[tray] show");
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.unminimize();
-                        let _ = window.set_focus();
-                    }
+                    restore_main_window(app);
                 }
                 "exit" => {
                     log::info!("[tray] exit");
@@ -683,20 +660,5 @@ mod tests {
         assert_eq!(parse_hex_color("not-a-color"), None);
         assert_eq!(parse_hex_color("#ZZZ"), None);
         assert_eq!(parse_hex_color(""), None);
-    }
-
-    #[test]
-    fn tray_click_hides_visible_unminimized_window() {
-        assert_eq!(tray_window_action(true, false), TrayWindowAction::Hide);
-    }
-
-    #[test]
-    fn tray_click_restores_minimized_window() {
-        assert_eq!(tray_window_action(true, true), TrayWindowAction::Restore);
-    }
-
-    #[test]
-    fn tray_click_restores_hidden_window() {
-        assert_eq!(tray_window_action(false, false), TrayWindowAction::Restore);
     }
 }
